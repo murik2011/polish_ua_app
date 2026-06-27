@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="Гра для вивчення польських слів з завантаженням власних наборів.">
+  <meta name="theme-color" content="#e2b96f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Пол↔Укр">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%231a1a2e' width='192' height='192'/><circle cx='96' cy='96' r='80' fill='%23e2b96f'/><text x='96' y='120' font-size='80' font-weight='bold' fill='%231a1a2e' text-anchor='middle' dominant-baseline='middle'>Λ</text></svg>">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%231a1a2e' width='192' height='192' rx='45'/><circle cx='96' cy='96' r='80' fill='%23e2b96f'/><text x='96' y='120' font-size='80' font-weight='bold' fill='%231a1a2e' text-anchor='middle' dominant-baseline='middle'>Λ</text></svg>">
+  
+  <title>Польська → Українська</title>
+  
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    body {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: hidden;
+    }
+
+    #root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    input, button, textarea, select {
+      font-size: 16px;
+    }
+
+    @supports (padding: max(0px)) {
+      body {
+        padding-left: max(20px, env(safe-area-inset-left));
+        padding-right: max(20px, env(safe-area-inset-right));
+        padding-bottom: max(20px, env(safe-area-inset-bottom));
+      }
+    }
+
+    * {
+      transition: opacity 0.3s ease;
+    }
+
+    button {
+      transition: all 0.2s ease;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <script>
+    // Регістрація Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js')
+          .then(reg => console.log('Service Worker registered'))
+          .catch(err => console.log('Service Worker registration failed:', err));
+      });
+    }
+
+    // IndexedDB для зберігання слів
+    class WordStorage {
+      constructor() {
+        this.dbName = 'PolishUkrainianGame';
+        this.storeName = 'wordSets';
+        this.db = null;
+      }
+
+      async init() {
+        return new Promise((resolve, reject) => {
+          const request = indexedDB.open(this.dbName, 1);
+          
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            this.db = request.result;
+            resolve(this.db);
+          };
+          
+          request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(this.storeName)) {
+              db.createObjectStore(this.storeName, { keyPath: 'id', autoIncrement: true });
+            }
+          };
+        });
+      }
+
+      async addWordSet(name, words) {
+        if (!this.db) await this.init();
+        
+        return new Promise((resolve, reject) => {
+          const transaction = this.db.transaction([this.storeName], 'readwrite');
+          const store = transaction.objectStore(this.storeName);
+          const request = store.add({
+            name,
+            words,
+            createdAt: new Date().toISOString(),
+          });
+          
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+        });
+      }
+
+      async getWordSets() {
+        if (!this.db) await this.init();
+        
+        return new Promise((resolve, reject) => {
+          const transaction = this.db.transaction([this.storeName], 'readonly');
+          const store = transaction.objectStore(this.storeName);
+          const request = store.getAll();
+          
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+        });
+      }
+
+      async deleteWordSet(id) {
+        if (!this.db) await this.init();
+        
+        return new Promise((resolve, reject) => {
+          const transaction = this.db.transaction([this.storeName], 'readwrite');
+          const store = transaction.objectStore(this.storeName);
+          const request = store.delete(id);
+          
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve();
+        });
+      }
+    }
+
+    const storage = new WordStorage();
+
+    // Вбудовані слова
+    const DEFAULT_WORDS = [
+      { pl: "jabłko", uk: "яблуко" },
+      { pl: "pies", uk: "собака" },
+      { pl: "kot", uk: "кіт" },
+      { pl: "dom", uk: "будинок" },
+      { pl: "woda", uk: "вода" },
+      { pl: "chleb", uk: "хліб" },
+      { pl: "słońce", uk: "сонце" },
+      { pl: "księżyc", uk: "місяць" },
+      { pl: "drzewo", uk: "дерево" },
+      { pl: "kwiat", uk: "квітка" },
+      { pl: "samochód", uk: "автомобіль" },
+      { pl: "miasto", uk: "місто" },
+      { pl: "rzeka", uk: "річка" },
+      { pl: "góra", uk: "гора" },
+      { pl: "książka", uk: "книга" },
+      { pl: "szkoła", uk: "школа" },
+      { pl: "przyjaciel", uk: "друг" },
+      { pl: "rodzina", uk: "сім'я" },
+      { pl: "miłość", uk: "кохання" },
+      { pl: "czas", uk: "час" },
+      { pl: "okno", uk: "вікно" },
+      { pl: "drzwi", uk: "двері" },
+      { pl: "stół", uk: "стіл" },
+      { pl: "krzesło", uk: "стілець" },
+      { pl: "lampa", uk: "лампа" },
+      { pl: "telefon", uk: "телефон" },
+      { pl: "muzyka", uk: "музика" },
+      { pl: "jedzenie", uk: "їжа" },
+      { pl: "herbata", uk: "чай" },
+      { pl: "kawa", uk: "кава" },
+    ];
+
+    function shuffle(arr) {
+      return [...arr].sort(() => Math.random() - 0.5);
+    }
+
+    function generateOptions(correct, all) {
+      const wrong = shuffle(all.filter(w => w.uk !== correct.uk)).slice(0, 3);
+      return shuffle([correct, ...wrong]);
+    }
+
+    // Меню виконання JSON
+    function MenuScreen({ onSelectWords, onNavigateToGame, wordSets, onDeleteSet }) {
+      const fileInputRef = React.useRef(null);
+
+      const handleFileSelect = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+
+          // Валідація
+          if (!Array.isArray(data) || data.length === 0) {
+            alert('❌ JSON мусить бути масивом з словами');
+            return;
+          }
+
+          // Перевірка структури
+          const isValid = data.every(item => 
+            item.pl && item.uk && typeof item.pl === 'string' && typeof item.uk === 'string'
+          );
+
+          if (!isValid) {
+            alert('❌ Кожне слово мусить мати поля "pl" і "uk"');
+            return;
+          }
+
+          // Зберігання в IndexedDB
+          const id = await storage.addWordSet(file.name.replace('.json', ''), data);
+          alert(`✅ Завантажено: ${data.length} слів!`);
+          onSelectWords(data, file.name.replace('.json', ''));
+        } catch (error) {
+          alert(`❌ Помилка: ${error.message}`);
+        }
+        
+        fileInputRef.current.value = '';
+      };
+
+      const styles = {
+        app: {
+          minHeight: "100vh",
+          background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+        },
+        card: {
+          background: "rgba(255,255,255,0.05)",
+          backdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: "24px",
+          padding: "36px 32px",
+          maxWidth: "500px",
+          width: "100%",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.4)",
+        },
+        title: {
+          fontSize: "32px",
+          fontWeight: 900,
+          color: "#e2b96f",
+          marginBottom: "8px",
+          textAlign: "center",
+        },
+        subtitle: {
+          fontSize: "14px",
+          color: "rgba(255,255,255,0.6)",
+          textAlign: "center",
+          marginBottom: "32px",
+        },
+        btn: {
+          width: "100%",
+          padding: "16px",
+          marginBottom: "12px",
+          border: "none",
+          borderRadius: "14px",
+          fontSize: "16px",
+          fontWeight: 700,
+          cursor: "pointer",
+          transition: "all 0.2s",
+        },
+        primaryBtn: {
+          background: "linear-gradient(135deg, #e2b96f, #c99a40)",
+          color: "#1a1a2e",
+        },
+        secondaryBtn: {
+          background: "rgba(226,185,111,0.1)",
+          border: "1px solid rgba(226,185,111,0.3)",
+          color: "#e2b96f",
+        },
+        dangerBtn: {
+          background: "rgba(241,70,104,0.1)",
+          border: "1px solid rgba(241,70,104,0.3)",
+          color: "#f14668",
+          fontSize: "14px",
+          padding: "10px",
+        },
+        setsList: {
+          marginTop: "24px",
+          borderTop: "1px solid rgba(255,255,255,0.1)",
+          paddingTop: "24px",
+        },
+        setItem: {
+          background: "rgba(255,255,255,0.03)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: "12px",
+          padding: "16px",
+          marginBottom: "12px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "12px",
+        },
+        setName: {
+          color: "#fff",
+          fontSize: "14px",
+          fontWeight: 600,
+          flex: 1,
+        },
+        setInfo: {
+          color: "rgba(255,255,255,0.5)",
+          fontSize: "12px",
+        },
+        btnsContainer: {
+          display: "flex",
+          gap: "8px",
+        },
+        smallBtn: {
+          padding: "8px 12px",
+          fontSize: "12px",
+          border: "none",
+          borderRadius: "8px",
+          cursor: "pointer",
+          fontWeight: 600,
+        },
+        playBtn: {
+          background: "rgba(72,199,142,0.2)",
+          color: "#48c78e",
+          border: "1px solid rgba(72,199,142,0.3)",
+        },
+        deleteBtn: {
+          background: "rgba(241,70,104,0.2)",
+          color: "#f14668",
+          border: "1px solid rgba(241,70,104,0.3)",
+        },
+      };
+
+      return React.createElement('div', { style: styles.app },
+        React.createElement('div', { style: styles.card },
+          React.createElement('div', { style: styles.title }, "Пол ↔ Укр 🎮"),
+          React.createElement('div', { style: styles.subtitle }, "Завантаж свої слова або грай зі стандартного набору"),
+          
+          // Кнопка для завантаження JSON
+          React.createElement('input', {
+            ref: fileInputRef,
+            type: 'file',
+            accept: '.json',
+            onChange: handleFileSelect,
+          }),
+          
+          React.createElement('button', {
+            style: { ...styles.btn, ...styles.primaryBtn },
+            onClick: () => fileInputRef.current.click(),
+          }, "📁 Завантажити JSON зі словами"),
+          
+          // Стандартний набір
+          React.createElement('button', {
+            style: { ...styles.btn, ...styles.secondaryBtn },
+            onClick: () => onSelectWords(DEFAULT_WORDS, "Стандартні слова"),
+          }, "📚 Грати зі стандартного набору (30 слів)"),
+
+          // Список завантажених наборів
+          wordSets.length > 0 && React.createElement('div', { style: styles.setsList },
+            React.createElement('div', { style: { color: 'rgba(255,255,255,0.5)', fontSize: '12px', marginBottom: '12px', letterSpacing: '1px', textTransform: 'uppercase' } }, "📦 Твої наборі слів:"),
+            wordSets.map(set => 
+              React.createElement('div', { key: set.id, style: styles.setItem },
+                React.createElement('div', null,
+                  React.createElement('div', { style: styles.setName }, set.name),
+                  React.createElement('div', { style: styles.setInfo }, `${set.words.length} слів`)
+                ),
+                React.createElement('div', { style: styles.btnsContainer },
+                  React.createElement('button', {
+                    style: { ...styles.smallBtn, ...styles.playBtn },
+                    onClick: () => onSelectWords(set.words, set.name),
+                  }, "▶️ Грати"),
+                  React.createElement('button', {
+                    style: { ...styles.smallBtn, ...styles.deleteBtn },
+                    onClick: () => onDeleteSet(set.id),
+                  }, "✕")
+                )
+              )
+            )
+          )
+        )
+      );
+    }
+
+    // Основна гра
+    function GameScreen({ words, setName, onBack }) {
+      const [deck, setDeck] = React.useState([]);
+      const [index, setIndex] = React.useState(0);
+      const [options, setOptions] = React.useState([]);
+      const [selected, setSelected] = React.useState(null);
+      const [score, setScore] = React.useState(0);
+      const [finished, setFinished] = React.useState(false);
+      const [streak, setStreak] = React.useState(0);
+      const [bestStreak, setBestStreak] = React.useState(0);
+      const [answered, setAnswered] = React.useState(false);
+
+      const ROUND = Math.min(10, words.length);
+
+      const startGame = React.useCallback(() => {
+        if (words.length < 2) {
+          alert('❌ Потрібно щонайменше 2 слова для гри!');
+          return;
+        }
+        const d = shuffle(words).slice(0, ROUND);
+        setDeck(d);
+        setIndex(0);
+        setScore(0);
+        setStreak(0);
+        setFinished(false);
+        setSelected(null);
+        setAnswered(false);
+        setOptions(generateOptions(d[0], words));
+      }, [words, ROUND]);
+
+      React.useEffect(() => { startGame(); }, [startGame]);
+
+      const handleAnswer = (opt) => {
+        if (answered) return;
+        setSelected(opt);
+        setAnswered(true);
+        const correct = opt.uk === deck[index].uk;
+        if (correct) {
+          setScore(s => s + 1);
+          const newStreak = streak + 1;
+          setStreak(newStreak);
+          setBestStreak(b => Math.max(b, newStreak));
+        } else {
+          setStreak(0);
+        }
+      };
+
+      const handleNext = () => {
+        const next = index + 1;
+        if (next >= ROUND) {
+          setFinished(true);
+        } else {
+          setIndex(next);
+          setOptions(generateOptions(deck[next], words));
+          setSelected(null);
+          setAnswered(false);
+        }
+      };
+
+      const stars = score >= ROUND * 0.9 ? 3 : score >= ROUND * 0.7 ? 2 : score >= ROUND * 0.5 ? 1 : 0;
+
+      const styles = {
+        app: {
+          minHeight: "100vh",
+          background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+        },
+        card: {
+          background: "rgba(255,255,255,0.05)",
+          backdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: "24px",
+          padding: "36px 32px",
+          maxWidth: "480px",
+          width: "100%",
+          boxShadow: "0 25px 50px rgba(0,0,0,0.4)",
+        },
+        header: {
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "8px",
+          gap: "16px",
+        },
+        title: {
+          color: "#e2b96f",
+          fontSize: "13px",
+          fontWeight: 700,
+          letterSpacing: "2px",
+          textTransform: "uppercase",
+        },
+        setTitle: {
+          color: "rgba(226,185,111,0.6)",
+          fontSize: "11px",
+          textAlign: "center",
+          marginBottom: "12px",
+        },
+        scoreBar: {
+          color: "#fff",
+          fontSize: "13px",
+          opacity: 0.7,
+          textAlign: "right",
+        },
+        progress: {
+          height: "4px",
+          background: "rgba(255,255,255,0.1)",
+          borderRadius: "2px",
+          marginBottom: "32px",
+          overflow: "hidden",
+        },
+        progressFill: {
+          height: "100%",
+          background: "linear-gradient(90deg, #e2b96f, #f0d090)",
+          borderRadius: "2px",
+          transition: "width 0.4s ease",
+          width: `${((index) / ROUND) * 100}%`,
+        },
+        wordBox: {
+          background: "rgba(226,185,111,0.08)",
+          border: "1px solid rgba(226,185,111,0.2)",
+          borderRadius: "16px",
+          padding: "28px 24px",
+          textAlign: "center",
+          marginBottom: "28px",
+        },
+        langLabel: {
+          fontSize: "11px",
+          color: "#e2b96f",
+          letterSpacing: "2px",
+          textTransform: "uppercase",
+          marginBottom: "10px",
+          display: "block",
+          opacity: 0.8,
+        },
+        word: {
+          fontSize: "38px",
+          fontWeight: 800,
+          color: "#ffffff",
+          letterSpacing: "-0.5px",
+        },
+        question: {
+          color: "rgba(255,255,255,0.5)",
+          fontSize: "13px",
+          textAlign: "center",
+          marginBottom: "16px",
+          letterSpacing: "0.5px",
+        },
+        options: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "12px",
+          marginBottom: "24px",
+        },
+        btn: (opt, answered, correct) => {
+          let bg = "rgba(255,255,255,0.06)";
+          let border = "1px solid rgba(255,255,255,0.1)";
+          let color = "#fff";
+          if (answered) {
+            if (opt.uk === correct.uk) {
+              bg = "rgba(72,199,142,0.2)";
+              border = "1px solid #48c78e";
+              color = "#48c78e";
+            } else if (selected?.uk === opt.uk) {
+              bg = "rgba(241,70,104,0.2)";
+              border = "1px solid #f14668";
+              color = "#f14668";
+            }
+          }
+          return {
+            background: bg,
+            border,
+            borderRadius: "14px",
+            padding: "16px 10px",
+            color,
+            fontSize: "18px",
+            fontWeight: 700,
+            cursor: answered ? "default" : "pointer",
+            textAlign: "center",
+          };
+        },
+        nextBtn: {
+          width: "100%",
+          padding: "16px",
+          background: "linear-gradient(135deg, #e2b96f, #c99a40)",
+          border: "none",
+          borderRadius: "14px",
+          color: "#1a1a2e",
+          fontSize: "16px",
+          fontWeight: 800,
+          cursor: "pointer",
+          letterSpacing: "0.5px",
+        },
+        streak: {
+          textAlign: "center",
+          color: "#e2b96f",
+          fontSize: "13px",
+          marginBottom: "16px",
+          minHeight: "20px",
+        },
+        finish: {
+          textAlign: "center",
+        },
+        finTitle: {
+          fontSize: "28px",
+          fontWeight: 900,
+          color: "#fff",
+          marginBottom: "8px",
+        },
+        finStars: {
+          fontSize: "48px",
+          marginBottom: "16px",
+          display: "block",
+        },
+        finScore: {
+          fontSize: "64px",
+          fontWeight: 900,
+          color: "#e2b96f",
+          lineHeight: 1,
+        },
+        finOf: {
+          color: "rgba(255,255,255,0.5)",
+          fontSize: "16px",
+          marginBottom: "24px",
+        },
+        finStat: {
+          color: "rgba(255,255,255,0.6)",
+          fontSize: "14px",
+          marginBottom: "28px",
+        },
+        restartBtn: {
+          padding: "12px 24px",
+          background: "linear-gradient(135deg, #e2b96f, #c99a40)",
+          border: "none",
+          borderRadius: "12px",
+          color: "#1a1a2e",
+          fontSize: "14px",
+          fontWeight: 700,
+          cursor: "pointer",
+          marginRight: "12px",
+        },
+        backBtn: {
+          padding: "12px 24px",
+          background: "rgba(255,255,255,0.1)",
+          border: "1px solid rgba(255,255,255,0.2)",
+          borderRadius: "12px",
+          color: "#fff",
+          fontSize: "14px",
+          fontWeight: 700,
+          cursor: "pointer",
+        },
+      };
+
+      if (finished) {
+        return React.createElement('div', { style: styles.app },
+          React.createElement('div', { style: styles.card },
+            React.createElement('div', { style: styles.finish },
+              React.createElement('span', { style: styles.finStars }, "⭐".repeat(stars) || "💪"),
+              React.createElement('div', { style: styles.finTitle }, "Раунд завершено!"),
+              React.createElement('div', { style: styles.finScore }, score),
+              React.createElement('div', { style: styles.finOf }, `з ${ROUND} правильних`),
+              React.createElement('div', { style: styles.finStat }, `Набір: "${setName}"`),
+              React.createElement('div', { style: styles.finStat }, `Найдовша серія: ${bestStreak} 🔥`),
+              React.createElement('div', { style: { marginTop: '24px' } },
+                React.createElement('button', { style: styles.restartBtn, onClick: startGame }, "🔄 Грати ще раз"),
+                React.createElement('button', { style: styles.backBtn, onClick: onBack }, "← Назад до меню")
+              )
+            )
+          )
+        );
+      }
+
+      if (!deck.length) return null;
+      const current = deck[index];
+
+      return React.createElement('div', { style: styles.app },
+        React.createElement('div', { style: styles.card },
+          React.createElement('div', { style: styles.setTitle }, `Набір: "${setName}"`),
+          React.createElement('div', { style: styles.header },
+            React.createElement('span', { style: styles.title }, "ПЛ → УКР"),
+            React.createElement('span', { style: styles.scoreBar }, `✓ ${score} / ${index} (${ROUND - index} лишилось)`)
+          ),
+          React.createElement('div', { style: styles.progress },
+            React.createElement('div', { style: styles.progressFill })
+          ),
+          React.createElement('div', { style: styles.wordBox },
+            React.createElement('span', { style: styles.langLabel }, "Польське слово"),
+            React.createElement('div', { style: styles.word }, current.pl)
+          ),
+          React.createElement('div', { style: styles.question }, "Оберіть переклад українською:"),
+          React.createElement('div', { style: styles.options },
+            options.map((opt) =>
+              React.createElement('button', {
+                key: opt.uk,
+                style: styles.btn(opt, answered, current),
+                onClick: () => handleAnswer(opt)
+              }, opt.uk)
+            )
+          ),
+          React.createElement('div', { style: styles.streak },
+            answered && selected?.uk === current.uk && streak > 1
+              ? `🔥 Серія: ${streak}!`
+              : answered && selected?.uk !== current.uk
+              ? `Правильно: «${current.uk}»`
+              : ""
+          ),
+          answered && React.createElement('button', { 
+            style: styles.nextBtn, 
+            onClick: handleNext 
+          }, index + 1 >= ROUND ? "Переглянути результат →" : "Наступне слово →")
+        )
+      );
+    }
+
+    // Головний додаток
+    function App() {
+      const [screen, setScreen] = React.useState('menu');
+      const [selectedWords, setSelectedWords] = React.useState(null);
+      const [selectedSetName, setSelectedSetName] = React.useState('');
+      const [wordSets, setWordSets] = React.useState([]);
+
+      React.useEffect(() => {
+        storage.init().then(() => {
+          storage.getWordSets().then(sets => {
+            setWordSets(sets);
+          });
+        });
+      }, []);
+
+      const handleSelectWords = (words, name) => {
+        setSelectedWords(words);
+        setSelectedSetName(name);
+        setScreen('game');
+      };
+
+      const handleDeleteSet = async (id) => {
+        if (confirm('Видалити цей набір слів?')) {
+          await storage.deleteWordSet(id);
+          setWordSets(wordSets.filter(s => s.id !== id));
+        }
+      };
+
+      const handleBack = () => {
+        setScreen('menu');
+        storage.getWordSets().then(sets => {
+          setWordSets(sets);
+        });
+      };
+
+      return React.createElement(React.Fragment, null,
+        screen === 'menu' 
+          ? React.createElement(MenuScreen, { 
+              onSelectWords: handleSelectWords,
+              wordSets: wordSets,
+              onDeleteSet: handleDeleteSet,
+            })
+          : React.createElement(GameScreen, { 
+              words: selectedWords,
+              setName: selectedSetName,
+              onBack: handleBack,
+            })
+      );
+    }
+
+    // Рендеринг
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
